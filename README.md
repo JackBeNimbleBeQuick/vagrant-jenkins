@@ -28,7 +28,7 @@ run shell script from vagrant command line to finish out the setups
 
 ## Connect
 - edit your /etc/hosts file to add:
-
+ >
     ...
     127.0.0.1 localhost
     ...
