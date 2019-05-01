@@ -12,8 +12,8 @@ https://github.com/geerlingguy/ansible-role-jenkins:
   - to provide safe / re-usable test environment for unit test automation explorations without impacting the current production Jenkins / Github operations
   
 ## Required
-[Virtual Box](https://www.virtualbox.org/wiki/Downloads) 
-[Vagrant](https://www.vagrantup.com/downloads.html)
+ - [Virtual Box](https://www.virtualbox.org/wiki/Downloads) 
+ - [Vagrant](https://www.vagrantup.com/downloads.html)
 
 ## Set up
 - git clone vagrant.git and from the command line enter:
