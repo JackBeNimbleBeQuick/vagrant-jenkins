@@ -20,11 +20,11 @@ https://github.com/geerlingguy/ansible-role-jenkins:
 - ... vagrant up
 
   - often times the full install does not all happen in the first go, therefore run the following as needed to get the build to complete
-  ... vagrant provision
+    - ... vagrant provision
 
 run shell script from vagrant command line to finish out the setups
-  ... vagrant ssh
-.. $ /vagrant/bin/setup.sh
+ - ... vagrant ssh
+ - ... $ /vagrant/bin/setup.sh
 
 ## Connect
 - edit your /etc/hosts file to add:
