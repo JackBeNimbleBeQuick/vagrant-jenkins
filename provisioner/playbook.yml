@@ -1,0 +1,336 @@
+---
+- hosts: jenkins
+
+
+  tasks:
+    # - name: Install Jenkins
+    #   become: yes
+    #   apt: name={{ item }} state=present
+    #   loop:
+    #     - git
+
+    # - name: Provide Deadsnakes Python apt_repository
+    #   command: sudo /usr/bin/add-apt-repository -y ppa:fkrull/deadsnakes-python2.7
+
+
+    - name: Include OS-Specific variables
+      include_vars: "settings.yml"
+
+    - name: Define jenkins_repo_url
+      set_fact:
+        jenkins_repo_url: "{{ __jenkins_repo_url }}"
+      when: jenkins_repo_url is not defined
+
+    - name: Define jenkins_repo_key_url
+      set_fact:
+        jenkins_repo_key_url: "{{ __jenkins_repo_key_url }}"
+      when: jenkins_repo_key_url is not defined
+
+    - name: Define jenkins_pkg_url
+      set_fact:
+        jenkins_pkg_url: "{{ __jenkins_pkg_url }}"
+      when: jenkins_pkg_url is not defined
+
+    - name: Ensure dependencies are installed.
+      become: yes
+      apt:
+        name:
+          - curl
+          - apt-transport-https
+        state: present
+
+    - name: Add Jenkins apt repository key.
+      become: yes
+      apt_key:
+        url: "{{ jenkins_repo_key_url }}"
+        state: present
+
+    - name: Add Jenkins apt repository.
+      become: yes
+      apt_repository:
+        repo: "{{ jenkins_repo_url }}"
+        state: present
+        update_cache: true
+      when: jenkins_repo_url != ""
+      tags: ['skip_ansible_lint']
+
+    - name: Download specific Jenkins version.
+      get_url:
+        url: "{{ jenkins_pkg_url }}/jenkins_{{ jenkins_version }}_all.deb"
+        dest: "/tmp/jenkins_{{ jenkins_version }}_all.deb"
+      when: jenkins_version is defined
+
+    - name: Check if we downloaded a specific version of Jenkins.
+      stat:
+        path: "/tmp/jenkins_{{ jenkins_version }}_all.deb"
+      register: specific_version
+      when: jenkins_version is defined
+
+    # - name: Install our specific version of Jenkins.
+    #   apt:
+    #     deb: "/tmp/jenkins_{{ jenkins_version }}_all.deb"
+    #     state: present
+    #   when: jenkins_version is defined and specific_version.stat.exists
+    #   notify: configure default users
+
+    # - name: Converge
+    #   hosts: all
+    #   become: true
+    #
+    # Ubuntu.
+    - name: Add repository for OpenJDK 8
+      become: yes
+      apt_repository: repo='ppa:openjdk-r/ppa'
+      when:
+        - ansible_distribution == "Ubuntu"
+        # - ansible_distribution_version == "18.04"
+
+    - name: Install JDK 8
+      become: yes
+      apt:
+        name: openjdk-8-jdk
+        state: present
+      when:
+        - ansible_distribution == "Ubuntu"
+
+    # Debian.
+    # - name: Enable Backports repository (Debian 8).
+    #   apt_repository:
+    #     repo: 'deb http://ftp.debian.org/debian {{ ansible_distribution_release }}-backports main'
+    #     state: present
+    #     filename: "{{ ansible_distribution_release }}_backports"
+    #   when: ansible_distribution == "Debian"
+
+    - name: Update apt cache.
+      become: yes
+      apt: update_cache=yes cache_valid_time=600
+      when: ansible_os_family == 'Debian'
+      changed_when: false
+
+    # See: http://unix.stackexchange.com/a/342469
+    - name: Install dependencies.
+      become: yes
+      apt:
+        default_release: "{{ ansible_distribution_release }}-backports"
+        name:
+          - openjdk-8-jre-headless
+          - ca-certificates-java
+        state: present
+      # when: ansible_distribution == "Debian"
+      when: ansible_distribution == "Ubuntu"
+
+    - name: ca-certificates update command line execution
+      become: yes
+      command: /usr/sbin/update-ca-certificates
+      when: ansible_distribution == "Ubuntu"
+
+    # # Red Hat.
+    # - name: Set the java_packages variable (RedHat).
+    #   set_fact:
+    #     java_packages:
+    #       - java-1.8.0-openjdk
+    #   when: ansible_os_family == 'RedHat'
+
+    # Ubuntu.
+    - name: Set the java_packages variable (Ubuntu).
+      become: yes
+      set_fact:
+        java_packages:
+          - openjdk-8-jdk
+      when: ansible_distribution == 'Ubuntu'
+
+    # Debian.
+    # - name: Set the java_packages variable (Debian).
+    #   set_fact:
+    #     java_packages:
+    #       - openjdk-8-jdk
+    #   when: ansible_distribution == 'Debian'
+
+
+    - name: Ensure Jenkins is installed.
+      become: yes
+      apt:
+        name: jenkins
+        state: "{{ jenkins_package_state }}"
+    #   notify: configure default users
+
+    - name: Check if jenkins_init_file exists.
+      become: yes
+      stat:
+        path: "{{ jenkins_init_file }}"
+      register: jenkins_init_file_stat
+
+    - name: Ensure jenkins_init_file exists.
+      become: yes
+      file:
+        path: "{{ jenkins_init_file }}"
+        state: touch
+      when: not jenkins_init_file_stat.stat.exists
+
+    - name: Modify variables in init file.
+      become: yes
+      lineinfile:
+        dest: "{{ jenkins_init_file }}"
+        insertafter: '^{{ item.option }}='
+        regexp: '^{{ item.option }}=\"\${{ item.option }} '
+        line: '{{ item.option }}="${{ item.option }} {{ item.value }}"'
+        state: present
+      with_items: "{{ jenkins_init_changes }}"
+      register: jenkins_init_prefix
+
+    - name: Set the Jenkins home directory.
+      become: yes
+      lineinfile:
+        dest: "{{ jenkins_init_file }}"
+        regexp: '^JENKINS_HOME=.*'
+        line: 'JENKINS_HOME={{ jenkins_home }}'
+      register: jenkins_home_config
+
+    - name: Immediately restart Jenkins on init config changes.
+      service: name=jenkins state=restarted
+      when: jenkins_init_prefix.changed
+      tags: ['skip_ansible_lint']
+
+    - name: Set HTTP port in Jenkins config.
+      lineinfile:
+        backrefs: true
+        dest: "{{ jenkins_init_file }}"
+        regexp: '^{{ jenkins_http_port_param }}='
+        line: '{{ jenkins_http_port_param }}={{ jenkins_http_port }}'
+      register: jenkins_http_config
+
+    - name: Ensure jenkins_home {{ jenkins_home }} exists
+      file:
+        path: "{{ jenkins_home }}"
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: u+rwx
+        follow: true
+
+    - name: Create custom init scripts directory.
+      become: yes
+      file:
+        path: "{{ jenkins_home }}/init.groovy.d"
+        state: directory
+        owner: "{{ jenkins_process_user }}"
+        group: "{{ jenkins_process_group }}"
+        mode: 0775
+
+    - name: Trigger handlers immediately in case Jenkins was installed
+      become: yes
+      meta: flush_handlers
+
+    - name: Immediately restart Jenkins on http or user changes.
+      become: yes
+      service: name=jenkins state=restarted
+      when: >
+        (jenkins_users_config is defined and jenkins_users_config.changed)
+        or (jenkins_http_config is defined and jenkins_http_config.changed)
+        or (jenkins_home_config is defined and jenkins_home_config.changed)
+      tags: ['skip_ansible_lint']
+
+    # Make sure Jenkins starts, then configure Jenkins.
+    - name: Ensure Jenkins is started and runs on startup.
+      become: yes
+      service: name=jenkins state=started enabled=yes
+
+    - name: Wait for Jenkins to start up before proceeding.
+      become: yes
+      command: >
+        curl -D - --silent --max-time 5 http://{{ jenkins_hostname }}:{{ jenkins_http_port }}{{ jenkins_url_prefix }}/cli/
+      args:
+        warn: false
+      register: result
+      until: >
+        (result.stdout.find("403 Forbidden") != -1)
+        or (result.stdout.find("200 OK") != -1)
+        and (result.stdout.find("Please wait while") == -1)
+      retries: "{{ jenkins_connection_retries }}"
+      delay: "{{ jenkins_connection_delay }}"
+      changed_when: false
+      check_mode: false
+
+    - name: Get the jenkins-cli jarfile from the Jenkins server.
+      become: yes
+      get_url:
+        url: "http://{{ jenkins_hostname }}:{{ jenkins_http_port }}{{ jenkins_url_prefix }}/jnlpJars/jenkins-cli.jar"
+        dest: "{{ jenkins_jar_location }}"
+      register: jarfile_get
+      until: "'OK' in jarfile_get.msg or '304' in jarfile_get.msg or 'file already exists' in jarfile_get.msg"
+      retries: 5
+      delay: 10
+      check_mode: false
+
+    - name: Remove Jenkins security init scripts after first startup.
+      become: yes
+      file:
+        path: "{{ jenkins_home }}/init.groovy.d/basic-security.groovy"
+        state: absent
+
+    # jenkins_plugin module doesn't support password files.
+    - name: Get Jenkins admin password from file.
+      become: yes
+      slurp:
+        src: "{{ jenkins_admin_password_file }}"
+      register: adminpasswordfile
+      no_log: true
+      when: jenkins_admin_password_file != ""
+      tags: ['skip_ansible_lint']
+
+    - name: Set Jenkins admin password fact.
+      become: yes
+      set_fact:
+        jenkins_admin_password: "{{ adminpasswordfile['stdout'] | default(jenkins_admin_password) }}"
+      no_log: true
+
+    # Update Jenkins so that plugin updates don't fail.
+    - name: Create Jenkins updates directory.
+      become: yes
+      file:
+        path: "{{ jenkins_home }}/updates"
+        state: directory
+        owner: jenkins
+        group: jenkins
+
+    - name: Download current plugin updates from Jenkins update site.
+      become: yes
+      get_url:
+        url: "{{ jenkins_updates_url }}/update-center.json"
+        dest: "{{ jenkins_home }}/updates/default.json"
+        owner: jenkins
+        group: jenkins
+        mode: 0440
+      changed_when: false
+      register: get_result
+      until: get_result is success
+      retries: 3
+      delay: 2
+
+    - name: Remove first and last line from json file.
+      become: yes
+      replace:
+        path: "{{ jenkins_home }}/updates/default.json"
+        regexp: "1d;$d"
+
+    # - name: Install Jenkins plugins using password.
+    #   become: yes
+    #   jenkins_plugin:
+    #     name: "{{ item }}"
+    #     jenkins_home: "{{ jenkins_home }}"
+    #     url_username: "{{ jenkins_admin_username }}"
+    #     url_password: "{{ jenkins_admin_password }}"
+    #     state: "{{ jenkins_plugins_state }}"
+    #     timeout: "{{ jenkins_plugin_timeout }}"
+    #     updates_expiration: "{{ jenkins_plugin_updates_expiration }}"
+    #     updates_url: "{{ jenkins_updates_url }}"
+    #     url: "http://{{ jenkins_hostname }}:{{ jenkins_http_port }}{{ jenkins_url_prefix }}"
+    #     with_dependencies: "{{ jenkins_plugins_install_dependencies }}"
+    #   loop: "{{ jenkins_plugins }}"
+    #   when: jenkins_admin_password != ""
+    #   notify: restart jenkins
+    #   tags: ['skip_ansible_lint']
+    #   register: plugin_result
+    #   until: plugin_result is success
+    #   retries: 3
+    #   delay: 2
